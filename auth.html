@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tài khoản - MeetScribe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="index.html">
+        <span class="brand-mark"></span>
+        <span>MeetScribe</span>
+      </a>
+      <nav class="top-auth" aria-label="Điều hướng">
+        <a class="top-auth-link" href="index.html">Trang chính</a>
+      </nav>
+    </header>
+
+    <main class="auth-page">
+      <section class="auth-card">
+        <p class="eyebrow">Tài khoản</p>
+        <h1 id="authTitle">Đăng nhập</h1>
+        <p class="subhead auth-subhead">
+          Đăng nhập để lưu nhiều record lên Supabase. Khách vẫn dùng được trang chính nhưng chỉ lưu tối đa 2 record cục bộ.
+        </p>
+
+        <div class="auth-tabs" role="tablist" aria-label="Chọn chế độ">
+          <button id="loginTab" type="button">Đăng nhập</button>
+          <button id="registerTab" type="button">Đăng kí</button>
+        </div>
+
+        <form id="authForm" class="auth-form">
+          <label>
+            Username
+            <input id="usernameInput" autocomplete="username" placeholder="baby_meeting" required />
+          </label>
+          <label>
+            Mật khẩu
+            <input id="passwordInput" type="password" autocomplete="current-password" placeholder="Ít nhất 8 ký tự" required />
+          </label>
+          <p id="passwordWarning" class="warning">Mật khẩu cần ít nhất 8 ký tự và 1 ký tự đặc biệt.</p>
+          <button id="submitAuthButton" class="primary" type="submit">Đăng nhập</button>
+          <p id="authMessage" class="auth-message" aria-live="polite"></p>
+        </form>
+      </section>
+    </main>
+
+    <script type="application/json" id="supabase-config">
+      {
+        "url": "",
+        "anonKey": ""
+      }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+      window.SUPABASE_CONFIG = window.SUPABASE_CONFIG || {
+        url: "",
+        anonKey: "",
+      };
+    </script>
+    <script src="env.js"></script>
+    <script src="auth.js"></script>
+  </body>
+</html>

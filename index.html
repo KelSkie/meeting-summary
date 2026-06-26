@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meeting Recorder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="index.html">
+        <span class="brand-mark"></span>
+        <span>MeetScribe</span>
+      </a>
+      <nav class="top-auth" aria-label="Tài khoản">
+        <a class="top-auth-link" id="topLoginLink" href="auth.html?mode=login">Đăng nhập</a>
+        <a class="top-auth-link primary-link" id="topRegisterLink" href="auth.html?mode=register">Đăng kí</a>
+        <span class="top-user hidden" id="topUserName"></span>
+        <button class="top-auth-link hidden" id="topLogoutButton" type="button">Đăng xuất</button>
+      </nav>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Ghi âm cuộc họp • Tóm tắt • Dịch</p>
+          <h1>Meeting Recorder</h1>
+          <p class="subhead">
+            Ghi âm micro hoặc âm thanh từ tab khác trong thời gian dài, theo dõi
+            transcript, tóm tắt và dịch sang ngôn ngữ bạn chọn.
+          </p>
+        </div>
+        <div class="status-panel" aria-live="polite">
+          <div>
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Sẵn sàng ghi âm</span>
+          </div>
+          <strong id="timer">00:00:00</strong>
+        </div>
+      </section>
+
+      <section class="recorder-grid">
+        <div class="control-surface">
+          <div class="section-heading">
+            <h2>Nguồn âm thanh</h2>
+            <span id="sourceLabel">Chưa chọn</span>
+          </div>
+
+          <div
+            class="source-grid"
+            role="group"
+            aria-label="Chọn nguồn âm thanh"
+          >
+            <button class="source-card" id="micButton" type="button">
+              <span class="icon">Mic</span>
+              <span>
+                <strong>Micro</strong>
+                <small>Ghi giọng nói từ thiết bị</small>
+              </span>
+            </button>
+            <button class="source-card" id="tabButton" type="button">
+              <span class="icon">Tab</span>
+              <span>
+                <strong>Tab hoặc màn hình</strong>
+                <small>Nhớ bật chia sẻ âm thanh</small>
+              </span>
+            </button>
+          </div>
+
+          <div class="button-row" role="group" aria-label="Điều khiển ghi âm">
+            <button class="primary" id="startButton" type="button" disabled>
+              Bắt đầu
+            </button>
+            <button id="pauseButton" type="button" disabled>Tạm dừng</button>
+            <button id="resumeButton" type="button" disabled>Tiếp tục</button>
+            <button class="danger" id="stopButton" type="button" disabled>
+              Kết thúc
+            </button>
+          </div>
+
+          <div class="meter" aria-label="Mức âm lượng">
+            <span id="meterBar"></span>
+          </div>
+
+          <div class="settings-grid">
+            <label>
+              Ngôn ngữ nhận diện
+              <select id="speechLanguage">
+                <option value="auto" selected>Tự động</option>
+                <option value="vi-VN">Tiếng Việt</option>
+                <option value="en-US">English</option>
+                <option value="ja-JP">Japanese</option>
+                <option value="ko-KR">Korean</option>
+                <option value="zh-CN">Chinese</option>
+                <option value="fr-FR">French</option>
+              </select>
+            </label>
+            <label>
+              Dịch sang
+              <select id="targetLanguage">
+                <option value="vi">Tiếng Việt</option>
+                <option value="en">English</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+                <option value="zh">Chinese</option>
+                <option value="fr">French</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="action-row">
+            <button id="summarizeButton" type="button" disabled>Tóm tắt</button>
+            <button id="translateButton" type="button" disabled>
+              Dịch transcript
+            </button>
+            <button id="saveCloudButton" type="button" disabled>
+              Lưu
+            </button>
+            <a id="downloadLink" class="download disabled" aria-disabled="true"
+              >Tải file ghi âm</a
+            >
+          </div>
+        </div>
+
+        <aside class="info-stack">
+          <article>
+            <h3>Phiên ghi âm</h3>
+            <dl>
+              <div>
+                <dt>Thời lượng</dt>
+                <dd id="durationStat">00:00:00</dd>
+              </div>
+              <div>
+                <dt>Dung lượng tạm tính</dt>
+                <dd id="sizeStat">0 MB</dd>
+              </div>
+              <div>
+                <dt>Lưu cục bộ</dt>
+                <dd id="storageStat">IndexedDB</dd>
+              </div>
+              <div>
+                <dt>Supabase</dt>
+                <dd id="cloudStat">Chưa cấu hình</dd>
+              </div>
+            </dl>
+          </article>
+          <article>
+            <h3>Publish internet</h3>
+            <p>
+              App có thể deploy dạng static. Micro và chia sẻ tab cần HTTPS trên
+              domain thật; localhost vẫn được trình duyệt cho phép khi phát
+              triển.
+            </p>
+          </article>
+        </aside>
+      </section>
+
+      <section class="workspace">
+        <div class="text-panel">
+          <div class="section-heading">
+            <h2>Transcript</h2>
+            <button id="clearTranscriptButton" type="button">Xóa</button>
+          </div>
+          <textarea
+            id="transcript"
+            placeholder="Transcript sẽ xuất hiện ở đây nếu trình duyệt hỗ trợ nhận diện giọng nói. Bạn cũng có thể dán nội dung cuộc họp vào đây rồi bấm Tóm tắt hoặc Dịch."
+          ></textarea>
+        </div>
+
+        <div class="text-panel">
+          <div class="section-heading">
+            <h2>Tóm tắt</h2>
+            <span id="detectedLanguage">Language detect: chưa có dữ liệu</span>
+          </div>
+          <div id="summaryOutput" class="output empty">
+            Chưa có bản tóm tắt.
+          </div>
+        </div>
+
+        <div class="text-panel wide">
+          <div class="section-heading">
+            <h2>Bản dịch</h2>
+            <span id="translationStatus">Sẵn sàng</span>
+          </div>
+          <div id="translationOutput" class="output empty">
+            Chưa có bản dịch.
+          </div>
+        </div>
+      </section>
+
+      <section class="library-panel">
+        <div class="section-heading">
+          <div>
+            <h2>Thư viện cục bộ</h2>
+            <p id="libraryStatus">Đang kiểm tra IndexedDB...</p>
+          </div>
+          <button id="refreshLibraryButton" type="button">Làm mới</button>
+        </div>
+        <div id="sessionList" class="session-list" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <script type="application/json" id="supabase-config">
+      {
+        "url": "",
+        "anonKey": ""
+      }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+      window.SUPABASE_CONFIG = window.SUPABASE_CONFIG || {
+        url: "",
+        anonKey: "",
+      };
+    </script>
+    <script src="env.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
