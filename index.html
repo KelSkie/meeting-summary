@@ -19,10 +19,19 @@
         <span>MeetScribe</span>
       </a>
       <nav class="top-auth" aria-label="Tài khoản">
-        <a class="top-auth-link" id="topLoginLink" href="auth.html?mode=login">Đăng nhập</a>
-        <a class="top-auth-link primary-link" id="topRegisterLink" href="auth.html?mode=register">Đăng kí</a>
+        <a class="top-auth-link" id="topLoginLink" href="auth.html?mode=login"
+          >Đăng nhập</a
+        >
+        <a
+          class="top-auth-link primary-link"
+          id="topRegisterLink"
+          href="auth.html?mode=register"
+          >Đăng kí</a
+        >
         <span class="top-user hidden" id="topUserName"></span>
-        <button class="top-auth-link hidden" id="topLogoutButton" type="button">Đăng xuất</button>
+        <button class="top-auth-link hidden" id="topLogoutButton" type="button">
+          Đăng xuất
+        </button>
       </nav>
     </header>
 
@@ -119,9 +128,7 @@
             <button id="translateButton" type="button" disabled>
               Dịch transcript
             </button>
-            <button id="saveCloudButton" type="button" disabled>
-              Lưu
-            </button>
+            <button id="saveCloudButton" type="button" disabled>Lưu</button>
             <a id="downloadLink" class="download disabled" aria-disabled="true"
               >Tải file ghi âm</a
             >
@@ -140,17 +147,17 @@
                 <dt>Dung lượng tạm tính</dt>
                 <dd id="sizeStat">0 MB</dd>
               </div>
-              <div>
+              <div class="hidden">
                 <dt>Lưu cục bộ</dt>
                 <dd id="storageStat">IndexedDB</dd>
               </div>
-              <div>
+              <div class="hidden">
                 <dt>Supabase</dt>
                 <dd id="cloudStat">Chưa cấu hình</dd>
               </div>
             </dl>
           </article>
-          <article>
+          <article class="hidden">
             <h3>Publish internet</h3>
             <p>
               App có thể deploy dạng static. Micro và chia sẻ tab cần HTTPS trên

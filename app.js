@@ -707,6 +707,7 @@ async function startRecording() {
       await audioContext.resume();
     }
 
+    startContinuousRecorder();
     startTimer();
     startSpeechRecognition();
     stopRequested = false;
@@ -715,7 +716,6 @@ async function startRecording() {
     setStatus("Đang ghi âm", "recording");
     isStarting = false;
     updateControls("recording");
-    runRecordingCycle();
   } catch (error) {
     isStarting = false;
     recorder = null;
@@ -732,7 +732,7 @@ function pauseRecording() {
   paused = true;
   recordingState = "paused";
   if (recorder?.state === "recording") {
-    recorder.stop();
+    recorder.pause();
   }
   elapsedBeforePause += Date.now() - startedAt;
   stopTimer();
@@ -745,6 +745,9 @@ function resumeRecording() {
   if (recordingState !== "paused") return;
   paused = false;
   recordingState = "recording";
+  if (recorder?.state === "paused") {
+    recorder.resume();
+  }
   startedAt = Date.now();
   startTimer();
   startSpeechRecognition();
@@ -761,7 +764,7 @@ async function stopRecording() {
     elapsedBeforePause += Date.now() - startedAt;
   }
   recordingState = "idle";
-  if (recorder?.state === "recording") {
+  if (recorder && recorder.state !== "inactive") {
     recorder.stop();
   }
   if (activeChunkPromise) {
@@ -780,71 +783,45 @@ function updateSize() {
   els.sizeStat.textContent = formatBytes(bytes);
 }
 
-function recordChunk(stream, ms) {
-  return new Promise((resolve, reject) => {
-    let lastStartError = null;
-    for (const mimeType of getSupportedMimeTypes()) {
-      try {
-        const nextRecorder = new MediaRecorder(
-          stream,
-          mimeType ? { mimeType } : undefined,
-        );
-        const localChunks = [];
-        recorder = nextRecorder;
-        nextRecorder.ondataavailable = (event) => {
-          if (event.data?.size) localChunks.push(event.data);
-        };
-        nextRecorder.onerror = () =>
-          reject(nextRecorder.error || new Error("MediaRecorder bị lỗi."));
-        nextRecorder.onstop = () => {
-          recorder = null;
-          const type = nextRecorder.mimeType || mimeType || "audio/webm";
-          resolve(localChunks.length ? new Blob(localChunks, { type }) : null);
-        };
-        nextRecorder.start();
-        window.setTimeout(() => {
-          if (nextRecorder.state !== "inactive") nextRecorder.stop();
-        }, ms);
-        return;
-      } catch (error) {
-        lastStartError = error;
-        recorder = null;
-      }
-    }
-    reject(
-      lastStartError ||
-        new Error("Không tạo được MediaRecorder cho nguồn âm thanh này."),
-    );
-  });
-}
-
-async function runRecordingCycle() {
-  while (!stopRequested && recordingStream) {
-    if (paused) {
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
-      continue;
-    }
+function startContinuousRecorder() {
+  let lastStartError = null;
+  for (const mimeType of getSupportedMimeTypes()) {
     try {
-      activeChunkPromise = recordChunk(recordingStream, CHUNK_MS);
-      const blob = await activeChunkPromise;
-      activeChunkPromise = null;
-      if (blob?.size) {
-        chunks.push(blob);
-        updateSize();
-      }
-    } catch (error) {
-      if (!stopRequested) {
-        stopRequested = true;
-        recordingState = "idle";
-        stopTimer();
-        stopSpeechRecognition();
-        setStatus(`Không bắt đầu ghi âm được: ${error.message}`);
-        updateControls("idle");
-      }
+      recorder = new MediaRecorder(
+        recordingStream,
+        mimeType ? { mimeType } : undefined,
+      );
+      activeChunkPromise = new Promise((resolve) => {
+        recorder.onstop = () => {
+          recorder = null;
+          activeChunkPromise = null;
+          resolve();
+        };
+      });
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) {
+          chunks.push(event.data);
+          updateSize();
+        }
+      };
+      recorder.onerror = () => {
+        const message = recorder?.error?.message || "MediaRecorder bị lỗi.";
+        console.warn(message);
+        setStatus(`Ghi âm bị lỗi: ${message}`);
+      };
+      recorder.start(CHUNK_MS);
       return;
+    } catch (error) {
+      lastStartError = error;
+      recorder = null;
+      activeChunkPromise = null;
     }
   }
-  activeChunkPromise = null;
+
+  throw (
+    lastStartError ||
+    new Error("Không tạo được MediaRecorder cho nguồn âm thanh này.")
+  );
 }
 
 async function buildDownloadAndSave() {
@@ -1008,20 +985,36 @@ function summarizeText(text) {
   ].join("\n");
 }
 
-async function translateWithBrowser(text, targetLanguage) {
-  if ("Translator" in self && "LanguageDetector" in self) {
+async function detectLanguageWithBrowser(text) {
+  if (!("LanguageDetector" in self)) return detectLanguage(text);
+
+  try {
     const detector = await self.LanguageDetector.create();
     const detected = await detector.detect(text);
-    const sourceLanguage =
-      detected[0]?.detectedLanguage || detectLanguage(text);
-    const translator = await self.Translator.create({
+    return detected[0]?.detectedLanguage || detectLanguage(text);
+  } catch (error) {
+    console.warn(error);
+    return detectLanguage(text);
+  }
+}
+
+async function translateWithBrowser(text, targetLanguage, sourceLanguage) {
+  if (!("Translator" in self)) return "";
+  if (sourceLanguage === targetLanguage) return text;
+
+  if (typeof self.Translator.availability === "function") {
+    const availability = await self.Translator.availability({
       sourceLanguage,
       targetLanguage,
     });
-    return translator.translate(text);
+    if (availability === "unavailable") return "";
   }
 
-  return "";
+  const translator = await self.Translator.create({
+    sourceLanguage,
+    targetLanguage,
+  });
+  return translator.translate(text);
 }
 
 async function translateText() {
@@ -1029,10 +1022,25 @@ async function translateText() {
   if (!text) return;
 
   const targetLanguage = els.targetLanguage.value;
+  const detected = await detectLanguageWithBrowser(text);
   els.translationStatus.textContent = "Đang dịch...";
 
+  if (detected === targetLanguage) {
+    setOutput(
+      els.translationOutput,
+      `Transcript đã là ${languageName(targetLanguage)}, nên không cần dịch.`,
+    );
+    els.translationStatus.textContent = "Ngôn ngữ đích trùng transcript";
+    await updateCurrentSession();
+    return;
+  }
+
   try {
-    const translated = await translateWithBrowser(text, targetLanguage);
+    const translated = await translateWithBrowser(
+      text,
+      targetLanguage,
+      detected,
+    );
     if (translated) {
       setOutput(els.translationOutput, translated);
       els.translationStatus.textContent = `Đã dịch sang ${languageName(targetLanguage)}`;
@@ -1043,14 +1051,13 @@ async function translateText() {
     console.warn(error);
   }
 
-  const detected = detectLanguage(text);
   const message = [
-    `Trình duyệt chưa bật API dịch cục bộ. Language detect hiện tại: ${languageName(detected)}.`,
+    `Chưa có bộ dịch khả dụng trên trình duyệt này. Đã phát hiện transcript là: ${languageName(detected)}.`,
     "",
-    "Bạn vẫn có thể dùng transcript ở khung bên trái để đưa vào dịch vụ dịch bạn chọn. Nếu Chrome hỗ trợ Built-in AI Translator trên máy này, bản dịch sẽ tự xuất hiện tại đây.",
+    "Để dịch tự động không cần server riêng, trình duyệt cần hỗ trợ Chrome Built-in AI Translator. Nếu muốn dịch ổn định trên mọi máy, app cần thêm API dịch hoặc AI sau.",
   ].join("\n");
   setOutput(els.translationOutput, message);
-  els.translationStatus.textContent = "Chưa có API dịch khả dụng";
+  els.translationStatus.textContent = "Cần bộ dịch hoặc API";
   await updateCurrentSession();
 }
 
