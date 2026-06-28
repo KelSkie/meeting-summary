@@ -5,6 +5,7 @@ const els = {
   pauseButton: document.querySelector("#pauseButton"),
   resumeButton: document.querySelector("#resumeButton"),
   stopButton: document.querySelector("#stopButton"),
+  transcribeButton: document.querySelector("#transcribeButton"),
   summarizeButton: document.querySelector("#summarizeButton"),
   translateButton: document.querySelector("#translateButton"),
   saveCloudButton: document.querySelector("#saveCloudButton"),
@@ -50,7 +51,9 @@ let appSession = null;
 let stream = null;
 let recordingStream = null;
 let recorder = null;
+let transcriptionRecorder = null;
 let chunks = [];
+let transcriptionChunks = [];
 let startedAt = 0;
 let elapsedBeforePause = 0;
 let timerId = null;
@@ -62,6 +65,7 @@ let recognition = null;
 let finalTranscript = "";
 let interimTranscript = "";
 let currentSource = "";
+let currentSourceType = "";
 let currentBlob = null;
 let currentSessionId = null;
 let currentObjectUrl = null;
@@ -70,7 +74,12 @@ let recordingState = "idle";
 let stopRequested = false;
 let paused = false;
 let activeChunkPromise = null;
+let activeTranscriptionPromise = null;
+let transcriptionSegmentTimer = null;
+let isTranscribing = false;
+let transcriptionRunId = 0;
 const CHUNK_MS = 10_000;
+const TRANSCRIPTION_CHUNK_MS = 120_000;
 
 function formatTime(ms) {
   const totalSeconds = Math.floor(ms / 1000);
@@ -103,6 +112,41 @@ function setStatus(text, mode = "idle") {
 function setOutput(el, text) {
   el.textContent = text;
   el.classList.toggle("empty", !text.trim());
+}
+
+function getTranscriptionEndpoint() {
+  const config = window.TRANSCRIPTION_CONFIG || {};
+  return config.endpoint || "/api/transcribe";
+}
+
+function speechLanguageCode() {
+  if (els.speechLanguage.value === "auto") return "";
+  return els.speechLanguage.value.split("-")[0];
+}
+
+function formatGroqQuota(rateLimit = {}) {
+  if (!rateLimit.requestsRemaining) return "";
+  return ` Groq còn ${rateLimit.requestsRemaining} request.`;
+}
+
+function formatRetryAfter(seconds) {
+  const numericSeconds = Number(seconds);
+  if (!Number.isFinite(numericSeconds) || numericSeconds <= 0) return "";
+  if (numericSeconds < 60) return `${Math.ceil(numericSeconds)} giây`;
+  return `${Math.ceil(numericSeconds / 60)} phút`;
+}
+
+function recordingStatusText() {
+  if (currentSourceType === "tab") {
+    return "Đang ghi tab audio. Live transcript từ tab cần API transcription; file audio vẫn được lưu.";
+  }
+  return "Đang ghi âm";
+}
+
+function resetSourceUi() {
+  els.sourceLabel.textContent = "Chưa chọn";
+  els.micButton.classList.remove("active");
+  els.tabButton.classList.remove("active");
 }
 
 function setupSupabase() {
@@ -267,11 +311,20 @@ function updateControls(state) {
   const canRecord = Boolean(
     navigator.mediaDevices?.getUserMedia && window.MediaRecorder,
   );
+  els.micButton.disabled =
+    isStarting || state === "recording" || state === "paused";
+  els.tabButton.disabled =
+    isStarting || state === "recording" || state === "paused";
   els.startButton.disabled =
     !canRecord || isStarting || state === "recording" || state === "paused";
   els.pauseButton.disabled = state !== "recording";
   els.resumeButton.disabled = state !== "paused";
   els.stopButton.disabled = state !== "recording" && state !== "paused";
+  els.transcribeButton.disabled =
+    isTranscribing ||
+    state === "recording" ||
+    state === "paused" ||
+    (!currentBlob && !transcriptionChunks.length);
   els.summarizeButton.disabled = !els.transcript.value.trim();
   els.translateButton.disabled = !els.transcript.value.trim();
   els.saveCloudButton.disabled =
@@ -508,6 +561,9 @@ function releaseStream() {
     stream = null;
   }
   recordingStream = null;
+  currentSource = "";
+  currentSourceType = "";
+  resetSourceUi();
   if (audioContext) {
     audioContext.close();
     audioContext = null;
@@ -530,6 +586,7 @@ async function chooseMicrophone() {
     },
   });
   currentSource = "Micro";
+  currentSourceType = "mic";
   els.sourceLabel.textContent = "Micro";
   els.micButton.classList.add("active");
   els.tabButton.classList.remove("active");
@@ -538,6 +595,7 @@ async function chooseMicrophone() {
 
 async function chooseTabAudio() {
   releaseStream();
+  setStatus("Hãy chọn tab/màn hình và bật chia sẻ âm thanh.");
   stream = await navigator.mediaDevices.getDisplayMedia({
     video: true,
     audio: {
@@ -547,6 +605,7 @@ async function chooseTabAudio() {
     },
   });
   currentSource = "Tab hoặc màn hình";
+  currentSourceType = "tab";
   els.sourceLabel.textContent = "Tab hoặc màn hình";
   els.tabButton.classList.add("active");
   els.micButton.classList.remove("active");
@@ -559,6 +618,7 @@ function prepareStream() {
     .filter((track) => track.readyState === "live");
   if (!audioTracks.length) {
     releaseStream();
+    currentSourceType = "";
     setStatus(
       "Nguồn này không có audio. Hãy chọn lại và bật chia sẻ âm thanh.",
     );
@@ -598,6 +658,12 @@ function setupMeter() {
 }
 
 function startSpeechRecognition() {
+  if (currentSourceType !== "mic") {
+    stopSpeechRecognition();
+    setStatus(recordingStatusText(), "recording");
+    return;
+  }
+
   if (!SpeechRecognition) {
     setStatus(
       "Đang ghi âm. Trình duyệt này chưa hỗ trợ live transcript.",
@@ -609,6 +675,7 @@ function startSpeechRecognition() {
   recognition = new SpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
   if (els.speechLanguage.value !== "auto") {
     recognition.lang = els.speechLanguage.value;
   }
@@ -633,30 +700,59 @@ function startSpeechRecognition() {
 
   recognition.onend = () => {
     if (recorder?.state === "recording") {
-      recognition.start();
+      try {
+        recognition.start();
+      } catch (error) {
+        console.warn(error);
+      }
     }
   };
 
-  recognition.onerror = () => {
+  recognition.onerror = (event) => {
+    const reason =
+      event.error === "not-allowed"
+        ? "Trình duyệt chưa cho phép micro."
+        : "Live transcript bị gián đoạn.";
     setStatus(
-      "Đang ghi âm. Live transcript bị gián đoạn, file audio vẫn được lưu.",
+      `Đang ghi âm. ${reason} File audio vẫn được lưu.`,
       "recording",
     );
   };
 
-  recognition.start();
+  try {
+    recognition.start();
+    if (els.speechLanguage.value === "auto") {
+      setStatus(
+        "Đang ghi âm. Transcript dùng ngôn ngữ mặc định của trình duyệt; chọn đúng ngôn ngữ nếu nghe sai.",
+        "recording",
+      );
+    }
+  } catch (error) {
+    console.warn(error);
+    setStatus(
+      "Đang ghi âm. Không khởi động được live transcript, file audio vẫn được lưu.",
+      "recording",
+    );
+  }
 }
 
 function stopSpeechRecognition() {
   if (recognition) {
     recognition.onend = null;
-    recognition.stop();
+    try {
+      recognition.stop();
+    } catch (error) {
+      console.warn(error);
+    }
     recognition = null;
   }
 }
 
 function resetRecordingState() {
+  transcriptionRunId += 1;
+  stopTranscriptionSegment();
   chunks = [];
+  transcriptionChunks = [];
   currentBlob = null;
   currentSessionId = null;
   elapsedBeforePause = 0;
@@ -680,15 +776,10 @@ async function startRecording() {
   updateControls("idle");
 
   if (!stream) {
-    try {
-      setStatus("Đang xin quyền micro...");
-      await chooseMicrophone();
-    } catch (error) {
-      isStarting = false;
-      setStatus(friendlyMediaError(error));
-      updateControls("idle");
-      return;
-    }
+    isStarting = false;
+    setStatus("Hãy chọn Micro hoặc Tab trước khi bắt đầu ghi âm.");
+    updateControls("idle");
+    return;
   }
 
   try {
@@ -708,12 +799,15 @@ async function startRecording() {
     }
 
     startContinuousRecorder();
+    startTranscriptionSegment();
     startTimer();
     startSpeechRecognition();
     stopRequested = false;
     paused = false;
     recordingState = "recording";
-    setStatus("Đang ghi âm", "recording");
+    if (currentSourceType !== "mic" || els.speechLanguage.value !== "auto") {
+      setStatus(recordingStatusText(), "recording");
+    }
     isStarting = false;
     updateControls("recording");
   } catch (error) {
@@ -734,6 +828,13 @@ function pauseRecording() {
   if (recorder?.state === "recording") {
     recorder.pause();
   }
+  if (transcriptionRecorder?.state === "recording") {
+    transcriptionRecorder.pause();
+  }
+  if (transcriptionSegmentTimer) {
+    window.clearTimeout(transcriptionSegmentTimer);
+    transcriptionSegmentTimer = null;
+  }
   elapsedBeforePause += Date.now() - startedAt;
   stopTimer();
   stopSpeechRecognition();
@@ -748,10 +849,21 @@ function resumeRecording() {
   if (recorder?.state === "paused") {
     recorder.resume();
   }
+  if (transcriptionRecorder?.state === "paused") {
+    transcriptionRecorder.resume();
+    transcriptionSegmentTimer = window.setTimeout(
+      stopTranscriptionSegment,
+      TRANSCRIPTION_CHUNK_MS,
+    );
+  } else {
+    startTranscriptionSegment();
+  }
   startedAt = Date.now();
   startTimer();
   startSpeechRecognition();
-  setStatus("Đang ghi âm", "recording");
+  if (currentSourceType !== "mic" || els.speechLanguage.value !== "auto") {
+    setStatus(recordingStatusText(), "recording");
+  }
   updateControls("recording");
 }
 
@@ -770,6 +882,7 @@ async function stopRecording() {
   if (activeChunkPromise) {
     await activeChunkPromise.catch(() => null);
   }
+  await stopTranscriptionSegment().catch(() => null);
   stopTimer();
   stopSpeechRecognition();
   updateTimer();
@@ -824,6 +937,79 @@ function startContinuousRecorder() {
   );
 }
 
+function stopTranscriptionSegment() {
+  if (transcriptionSegmentTimer) {
+    window.clearTimeout(transcriptionSegmentTimer);
+    transcriptionSegmentTimer = null;
+  }
+  if (transcriptionRecorder && transcriptionRecorder.state !== "inactive") {
+    transcriptionRecorder.stop();
+  }
+  return activeTranscriptionPromise || Promise.resolve();
+}
+
+function startTranscriptionSegment() {
+  if (!recordingStream || transcriptionRecorder) return;
+
+  let lastStartError = null;
+  const runId = transcriptionRunId;
+  for (const mimeType of getSupportedMimeTypes()) {
+    try {
+      const segmentRecorder = new MediaRecorder(
+        recordingStream,
+        mimeType ? { mimeType } : undefined,
+      );
+      const segmentParts = [];
+      transcriptionRecorder = segmentRecorder;
+      activeTranscriptionPromise = new Promise((resolve) => {
+        segmentRecorder.onstop = () => {
+          if (transcriptionSegmentTimer) {
+            window.clearTimeout(transcriptionSegmentTimer);
+            transcriptionSegmentTimer = null;
+          }
+          transcriptionRecorder = null;
+          activeTranscriptionPromise = null;
+          const type = segmentRecorder.mimeType || mimeType || "audio/webm";
+          if (segmentParts.length && runId === transcriptionRunId) {
+            transcriptionChunks.push(new Blob(segmentParts, { type }));
+          }
+          resolve();
+          if (
+            runId === transcriptionRunId &&
+            recordingState === "recording" &&
+            !stopRequested
+          ) {
+            startTranscriptionSegment();
+          }
+        };
+      });
+      segmentRecorder.ondataavailable = (event) => {
+        if (event.data?.size) segmentParts.push(event.data);
+      };
+      segmentRecorder.onerror = () => {
+        const message =
+          segmentRecorder.error?.message || "Không tạo được chunk transcript.";
+        console.warn(message);
+      };
+      segmentRecorder.start();
+      transcriptionSegmentTimer = window.setTimeout(
+        stopTranscriptionSegment,
+        TRANSCRIPTION_CHUNK_MS,
+      );
+      return;
+    } catch (error) {
+      lastStartError = error;
+      transcriptionRecorder = null;
+      activeTranscriptionPromise = null;
+    }
+  }
+
+  console.warn(
+    lastStartError ||
+      new Error("Không tạo được MediaRecorder cho transcript AI."),
+  );
+}
+
 async function buildDownloadAndSave() {
   if (!chunks.length) {
     setStatus("Đã dừng nhưng chưa có dữ liệu audio để lưu.");
@@ -865,6 +1051,7 @@ async function buildDownloadAndSave() {
     els.storageStat.textContent = "Lỗi lưu";
     setStatus("Không lưu được IndexedDB, vẫn có thể tải file ghi âm.");
   }
+  updateControls("idle");
 }
 
 function detectLanguage(text) {
@@ -1061,6 +1248,102 @@ async function translateText() {
   await updateCurrentSession();
 }
 
+async function transcribeAudioBlob(blob, index, total) {
+  const endpoint = getTranscriptionEndpoint();
+  const formData = new FormData();
+  formData.append("file", blob, `meeting-segment-${index}.webm`);
+  formData.append("model", "whisper-large-v3");
+  formData.append("response_format", "json");
+
+  const language = speechLanguageCode();
+  if (language) formData.append("language", language);
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    body: formData,
+  });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const retryAfter =
+      payload.retryAfter || response.headers.get("retry-after") || "";
+    const error = new Error(
+      payload.error ||
+        `Groq transcription thất bại ở đoạn ${index}/${total}.`,
+    );
+    error.status = response.status;
+    error.retryAfter = retryAfter;
+    error.rateLimit = payload.rateLimit || {};
+    throw error;
+  }
+
+  return payload;
+}
+
+async function transcribeWithGroq() {
+  if (!currentBlob && !transcriptionChunks.length) {
+    setStatus("Chưa có file ghi âm để tạo transcript AI.");
+    return;
+  }
+
+  const audioParts = transcriptionChunks.length
+    ? transcriptionChunks
+    : [currentBlob];
+  const transcripts = [];
+  isTranscribing = true;
+  updateControls(recordingState);
+
+  try {
+    for (let index = 0; index < audioParts.length; index += 1) {
+      setStatus(
+        `Đang tạo transcript AI bằng Groq (${index + 1}/${audioParts.length})...`,
+      );
+      const result = await transcribeAudioBlob(
+        audioParts[index],
+        index + 1,
+        audioParts.length,
+      );
+      if (result.text?.trim()) transcripts.push(result.text.trim());
+      setStatus(
+        `Đã transcribe ${index + 1}/${audioParts.length}.${formatGroqQuota(
+          result.rateLimit,
+        )}`,
+      );
+    }
+
+    const transcript = transcripts.join("\n\n").trim();
+    if (!transcript) {
+      setStatus("Groq không trả về transcript cho audio này.");
+      return;
+    }
+
+    finalTranscript = `${transcript} `;
+    interimTranscript = "";
+    els.transcript.value = transcript;
+    setOutput(els.summaryOutput, summarizeText(transcript));
+    updateLanguageAndActions();
+    await updateCurrentSession();
+    setStatus(
+      `Đã ghép transcript từ ${audioParts.length} đoạn và tạo tóm tắt.`,
+    );
+  } catch (error) {
+    console.warn(error);
+    if (error.status === 429) {
+      const retryText = formatRetryAfter(error.retryAfter);
+      setStatus(
+        retryText
+          ? `Groq đang hết request hoặc rate-limit. Thử lại sau ${retryText}.`
+          : "Groq đang hết request hoặc rate-limit. Hãy thử lại sau.",
+      );
+      return;
+    }
+    setStatus(`Không tạo được transcript AI: ${error.message}`);
+  } finally {
+    isTranscribing = false;
+    updateControls(recordingState);
+  }
+}
+
 async function saveMeetingToSupabase() {
   if (!supabaseClient) {
     els.cloudStat.textContent = "Chưa cấu hình";
@@ -1132,6 +1415,9 @@ els.startButton.addEventListener("click", () =>
 els.pauseButton.addEventListener("click", pauseRecording);
 els.resumeButton.addEventListener("click", resumeRecording);
 els.stopButton.addEventListener("click", stopRecording);
+els.transcribeButton.addEventListener("click", () =>
+  transcribeWithGroq().catch((error) => setStatus(error.message)),
+);
 els.summarizeButton.addEventListener("click", summarizeTranscript);
 els.translateButton.addEventListener("click", translateText);
 els.saveCloudButton.addEventListener("click", () =>
